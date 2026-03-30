@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Pooling dApp</title>
+    <script src="https://cdn.jsdelivr.net/npm/web3@1.8.0/dist/web3.min.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; line-height: 1.6; background-color: #f4f7f6; }
+        .container { max-width: 500px; margin: auto; border: 1px solid #ddd; padding: 20px; border-radius: 10px; background: white; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h2, h3 { text-align: center; color: #2c3e50; }
+        button { width: 100%; padding: 12px; margin: 10px 0; cursor: pointer; background: #3498db; color: white; border: none; border-radius: 5px; font-weight: bold; transition: 0.3s; }
+        button:hover { opacity: 0.8; }
+        button:disabled { background: #bdc3c7; cursor: not-allowed; }
+        .status { background: #f9f9f9; padding: 15px; border-radius: 5px; margin-top: 10px; border-left: 5px solid #3498db; }
+        .winner-box { background: #e8f8f5; padding: 10px; border-radius: 5px; margin-top: 10px; border: 1px dashed #27ae60; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Pooling dApp</h2>
+    <div class="status">
+        <p><strong>내 주소:</strong> <span id="account">연결 필요</span></p>
+        <p><strong>풀 잔액:</strong> <span id="balance">0</span> ETH</p>
+        <p><strong>참여자 수:</strong> <span id="pCount">0</span> 명</p>
+    </div>
+
+    <div id="winnerDisplay" class="winner-box" style="display:none;">
+        <strong>🎉 최근 당첨자:</strong> <br><small id="winnerAddr"></small>
+    </div>
+
+    <button id="btnJoin">풀 참여하기(Bet) (0.01 ETH으로 변경)</button>
+
+    <hr>
+    <h3>관리자 메뉴</h3>
+    <button id="btnDraw" style="background: #e67e22;">추첨 시작 (Draw)</button>
+    <button id="btnDistribute" style="background: #27ae60;">상금 수동 배분</button>
+    <button id="btnReset" style="background: #95a5a6;">풀 초기화 (Reset)</button>
+</div>
+
+<script>
+let web3;
+let contract;
+// 중요: 배포한 컨트랙트 주소로 수정하세요
+const contractAddress = '0xB01C4b76040Ec66ea77C9CDc849815988DA90D39'; 
+
+// Solidity 파일과 일치하도록 정리된 ABI
+const abi = [
+	{
+		"inputs": [],
+		"stateMutability": "payable",
+		"type": "constructor"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "owner",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "feeAmount",
+				"type": "uint256"
+			}
+		],
+		"name": "OwnerFeePaid",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "participant",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			}
+		],
+		"name": "ParticipantJoined",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "totalAmount",
+				"type": "uint256"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "participantCount",
+				"type": "uint256"
+			}
+		],
+		"name": "PoolClosed",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "winner",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "winningAmount",
+				"type": "uint256"
+			}
+		],
+		"name": "WinnerSelected",
+		"type": "event"
+	},
+	{
+		"inputs": [],
+		"name": "PARTICIPANT_AMOUNT",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "bet",
+		"outputs": [],
+		"stateMutability": "payable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "calculateWinnerPrize",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "distributePrizes",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "draw",
+		"outputs": [],
+		"stateMutability": "payable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "emergencyWithdraw",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "getParticipantCount",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "getPoolBalance",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "_address",
+				"type": "address"
+			}
+		],
+		"name": "isParticipant",
+		"outputs": [
+			{
+				"internalType": "bool",
+				"name": "",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "owner",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"name": "participants",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "poolBalance",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "poolClosed",
+		"outputs": [
+			{
+				"internalType": "bool",
+				"name": "",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "resetPool",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "selectedWinner",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "winnerDrawn",
+		"outputs": [
+			{
+				"internalType": "bool",
+				"name": "",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"stateMutability": "payable",
+		"type": "receive"
+	}
+];
+
+async function init() {
+    if (window.ethereum) {
+        web3 = new Web3(window.ethereum);
+        try {
+            // 1. Force MetaMask to switch to Sepolia (Chain ID 11155111)
+            await window.ethereum.request({
+                method: 'wallet_switchEthereumChain',
+                params: [{ chainId: '0xaa36a7' }], // 0xaa36a7 is 11155111 in hex
+            });
+
+            // 2. Request account access
+            const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+            document.getElementById('account').innerText = accounts[0];
+            
+            // 3. Set up contract
+            contract = new web3.eth.Contract(abi, contractAddress);
+            updateStatus();
+        } catch (error) {
+            alert("네트워크를 Sepolia로 변경해주세요!");
+        }
+    } else {
+        alert("MetaMask를 설치해주세요!");
+    }
+}
+
+async function updateStatus() {
+    const balance = await contract.methods.getPoolBalance().call();
+    const count = await contract.methods.getParticipantCount().call();
+    const winnerDrawn = await contract.methods.winnerDrawn().call();
+    
+    document.getElementById('balance').innerText = web3.utils.fromWei(balance, 'ether');
+    document.getElementById('pCount').innerText = count;
+
+    if (winnerDrawn) {
+        const winner = await contract.methods.selectedWinner().call();
+        document.getElementById('winnerDisplay').style.display = 'block';
+        document.getElementById('winnerAddr').innerText = winner;
+    } else {
+        document.getElementById('winnerDisplay').style.display = 'none';
+    }
+}
+
+// 1. 참여하기 (bet)
+document.getElementById('btnJoin').onclick = async () => {
+    const accounts = await web3.eth.getAccounts();
+    try {
+        await contract.methods.bet().send({
+            from: accounts[0],
+            value: web3.utils.toWei('0.01', 'ether')
+        });
+        updateStatus();
+    } catch (e) { alert("참여 실패: " + e.message); }
+};
+
+// 2. 추첨 (draw)
+document.getElementById('btnDraw').onclick = async () => {
+    const accounts = await web3.eth.getAccounts();
+    try {
+        await contract.methods.draw().send({ from: accounts[0] });
+        alert("추첨이 완료되었습니다!");
+        updateStatus();
+    } catch (e) { alert("추첨 실패: " + e.message); }
+};
+
+// 3. 상금 배분 (distributePrizes)
+document.getElementById('btnDistribute').onclick = async () => {
+    const accounts = await web3.eth.getAccounts();
+    try {
+        await contract.methods.distributePrizes().send({ from: accounts[0] });
+        alert("상금이 전송되었습니다.");
+        updateStatus();
+    } catch (e) { alert("배분 실패: " + e.message); }
+};
+
+// 4. 초기화 (resetPool)
+document.getElementById('btnReset').onclick = async () => {
+    const accounts = await web3.eth.getAccounts();
+    try {
+        await contract.methods.resetPool().send({ from: accounts[0] });
+        alert("풀이 초기화되었습니다.");
+        updateStatus();
+    } catch (e) { alert("초기화 실패: " + e.message); }
+};
+
+window.addEventListener('load', init);
+</script>
+</body>
+</html>
